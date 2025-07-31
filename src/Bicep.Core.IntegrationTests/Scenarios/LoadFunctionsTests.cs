@@ -1184,7 +1184,7 @@ var fileObj = loadYamlContent('file.yaml', '$', '" + encodingName + @"')
             using (new AssertionScope())
             {
                 template!.Should().BeNull();
-                diags.ExcludingLinterDiagnostics().Should().HaveDiagnostics(new[] { ("BCP422", DiagnosticLevel.Error, $"An error occured browsing directory. Directory ./nonExistingDirectory does not exist or additional permissions are necessary to access it") });
+                diags.ExcludingLinterDiagnostics().Should().HaveDiagnostics(new[] { ("BCP423", DiagnosticLevel.Error, $"An error occured browsing directory. Directory ./nonExistingDirectory does not exist or additional permissions are necessary to access it.") });
             }
         }
 
