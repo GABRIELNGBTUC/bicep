@@ -1923,9 +1923,14 @@ namespace Bicep.Core.Diagnostics
                 with
             { Fixes = [AsNonNullable(expression)] };
 
-            public Diagnostic ErrorOccuredBrowsingDirectory(string failureMessage) => CoreError(
+            public Diagnostic DirectoryDoesNotExist(string relativePath) => CoreError(
                 "BCP423",
-                $"An error occured browsing directory. {failureMessage}"
+                $"An error occured browsing directory. Directory {relativePath} does not exist or additional permissions are necessary to access it."
+            );
+
+            public Diagnostic ErrorOccuredBrowsingDirectory(string relativePath, string exceptionMessage) => CoreError(
+                "BCP424",
+                $"An error occured browsing directory. {exceptionMessage}"
             );
         }
 

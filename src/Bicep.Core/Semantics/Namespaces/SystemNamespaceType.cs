@@ -2273,7 +2273,7 @@ namespace Bicep.Core.Semantics.Namespaces
             }
 
 
-            var auxiliaryFileLoadResult = RelativePath.TryCreate(directoryPathType.RawStringValue).Transform(path => model.SourceFile.TryGetAuxiliaryFiles(path, pathSearchPattern));
+            var auxiliaryFileLoadResult = RelativePath.TryCreate(directoryPathType.RawStringValue).Transform(path => model.SourceFile.TryListFilesInDirectory(path, pathSearchPattern));
 
             if (!auxiliaryFileLoadResult.IsSuccess(out var auxiliaryFiles, out var errorBuilder))
             {
