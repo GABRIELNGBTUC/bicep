@@ -21,7 +21,7 @@ public class TypePropertyAttribute : Attribute
     /// <param name="description">A human-readable description of the property, or <c>null</c> if not specified.</param>
     /// <param name="flags">Flags that describe the property's characteristics (e.g., required, read-only).</param>
     /// <param name="isSecure">Indicates whether the property contains sensitive information and should be treated as secure.</param>
-    /// <param name="isNullable">Indicates whether the property should be treated as nullable by bicep</param>
+    /// <param name="isNullable">Indicates whether the property should be treated as nullable by bicep. Using the types <c>int?</c> and <c>bool?</c> is considered as setting this attribute as true</param>
     public TypePropertyAttribute(
         string? description,
         ObjectTypePropertyFlags flags = ObjectTypePropertyFlags.None,
