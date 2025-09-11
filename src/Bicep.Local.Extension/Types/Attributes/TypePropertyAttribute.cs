@@ -1,5 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+
+using System.ComponentModel.DataAnnotations;
 using Azure.Bicep.Types.Concrete;
 
 namespace Bicep.Local.Extension.Types.Attributes;
@@ -50,7 +52,36 @@ public class TypePropertyAttribute : Attribute
     public bool IsSecure { get; }
 
     /// <summary>
-    /// Gets a value indicating whether the property should be marked as nullable by bicep
+    /// Gets a value indicating whether the property should be marked as nullable by bicep.
     /// </summary>
     public bool IsNullable { get; }
+
+    /// <summary>
+    /// Gets the maximum length of a bicep string.
+    /// </summary>
+    public int? MaxLength { get; private set; }
+
+    /// <summary>
+    /// Gets the minimum length of a bicep string.
+    /// </summary>
+    public int? MinLength { get; private set; }
+
+    /// <summary>
+    /// Gets the regex pattern to validate the bicep string.
+    /// </summary>
+    public string? Pattern { get; private set; }
+
+    /// <summary>
+    /// Copies into the attribute any relevant attribute values used to generate a string from the <see cref="MaxLengthAttribute"/>, <see cref="MinLengthAttribute"/> and <see cref="BicepStringPatternAttribute"/> classes.
+    /// </summary>
+    /// <param name="maxLengthAttribute"></param>
+    /// <param name="minLengthAttribute"></param>
+    /// <param name="patternAttribute"></param>
+    public void MergeStringPropertyAttribute(MaxLengthAttribute? maxLengthAttribute = null,
+        MinLengthAttribute? minLengthAttribute = null, BicepStringPatternAttribute? patternAttribute = null)
+    {
+        MaxLength = maxLengthAttribute?.Length;
+        MinLength = minLengthAttribute?.Length;
+        Pattern = patternAttribute?.Value;
+    }
 }
