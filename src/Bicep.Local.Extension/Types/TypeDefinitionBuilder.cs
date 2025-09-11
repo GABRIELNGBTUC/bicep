@@ -4,9 +4,11 @@
 using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
+using System.ComponentModel.DataAnnotations;
 using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using System.Text;
+using System.Text.Json.Serialization;
 using Azure.Bicep.Types;
 using Azure.Bicep.Types.Concrete;
 using Azure.Bicep.Types.Index;
@@ -15,6 +17,24 @@ using Bicep.Local.Extension.Types.Attributes;
 using static Google.Protobuf.Reflection.GeneratedCodeInfo.Types;
 
 namespace Bicep.Local.Extension.Types;
+
+public static class TypeFactoryExtensions
+{
+    public static ITypeReference AddOrGetReference(this TypeFactory factory, TypeBase type)
+    {
+        try
+        {
+            var typeReference = factory.Create(() => type);
+            return factory.GetReference(typeReference);
+        }
+        catch (ArgumentException)
+        {
+        }
+
+        return factory.GetReference(type);
+    }
+}
+
 public class TypeDefinitionBuilder
     : ITypeDefinitionBuilder
 {
@@ -62,8 +82,8 @@ public class TypeDefinitionBuilder
         this.typeProvider = typeProvider;
 
         this.typeToTypeBaseMap = typeToTypeBaseMap is null || typeToTypeBaseMap.Count == 0
-                ? throw new ArgumentException(nameof(typeToTypeBaseMap))
-                : typeToTypeBaseMap;
+            ? throw new ArgumentException(nameof(typeToTypeBaseMap))
+            : typeToTypeBaseMap;
 
         this.visited = new HashSet<Type>();
         this.typeCache = new ConcurrentDictionary<Type, TypeBase>();
@@ -91,8 +111,8 @@ public class TypeDefinitionBuilder
         CrossFileTypeReference? config = null;
         if (configurationType is not null)
         {
-            var configReference = factory.Create(() => GenerateForRecord(factory, typeCache, configurationType));
-            config = new CrossFileTypeReference(typesJsonPath, factory.GetIndex(configReference));
+            var configReference = factory.AddOrGetReference(GenerateForRecord(factory, typeCache, configurationType));
+            config = new CrossFileTypeReference(typesJsonPath, factory.GetIndex(configReference.Type));
         }
 
         var index = new TypeIndex(
@@ -122,6 +142,58 @@ public class TypeDefinitionBuilder
     {
         var typeProperties = new Dictionary<string, ObjectTypeProperty>();
 
+        // Handle discriminated types
+        if (!visited.Contains(type) && type.GetCustomAttribute<JsonPolymorphicAttribute>() is { } polymorphicAttribute
+                                    && type.GetCustomAttributes<JsonDerivedTypeAttribute>() is { } derivedTypesAttribute)
+        {
+            visited.Add(type);
+            var baseProperties = (ObjectType)GenerateForRecord(factory, typeCache, type);
+            var childTypesDictionary = new Dictionary<string, ITypeReference>();
+            foreach (var derivedType in derivedTypesAttribute)
+            {
+                string? typeDiscriminator = derivedType.TypeDiscriminator?.ToString();
+                if (typeDiscriminator is null)
+                {
+                    throw new ArgumentNullException(nameof(derivedType.TypeDiscriminator), "The type discriminator property from JsonDerivedTypeAttribute cannot be null.");
+                }
+                else
+                {
+                    var discriminatedTypeProperties = typeCache.GetOrAdd(derivedType.DerivedType, _ => (ObjectType)GenerateForRecord(factory, typeCache, derivedType.DerivedType));
+                    var concreteDiscriminatedTypeProperties = (ObjectType)discriminatedTypeProperties;
+                    var discriminatorTypeReference = factory.AddOrGetReference(new StringLiteralType(typeDiscriminator));
+                    var newProperties =
+                            new Dictionary<string, ObjectTypeProperty>()
+                            {
+                                {
+                                    polymorphicAttribute.TypeDiscriminatorPropertyName!,
+                                    new ObjectTypeProperty(
+                                        discriminatorTypeReference, ObjectTypePropertyFlags.Required, "The discriminator for derived types.")
+                                }
+                            }
+                        ;
+                    foreach (var kvp in concreteDiscriminatedTypeProperties.Properties)
+                    {
+                        newProperties.Add(kvp.Key, kvp.Value);
+                    }
+
+                    var newObjectType = new ObjectType(concreteDiscriminatedTypeProperties.Name,
+                        newProperties.Union(concreteDiscriminatedTypeProperties.Properties.ToDictionary(kvp => kvp.Key, kvp => kvp.Value))
+                            .ToImmutableDictionary(),
+                        concreteDiscriminatedTypeProperties.AdditionalProperties);
+
+                    childTypesDictionary.Add(derivedType.DerivedType.Name, factory.AddOrGetReference(newObjectType));
+                }
+            }
+
+            var typeReference = typeCache.GetOrAdd(type, _ => factory.AddOrGetReference(new DiscriminatedObjectType(
+                type.Name,
+                polymorphicAttribute.TypeDiscriminatorPropertyName!, baseProperties.Properties
+                , childTypesDictionary)).Type);
+
+            // We return here since we already explored the base and derived types
+            return typeReference;
+        }
+
         foreach (var property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
         {
             if (visited.Contains(property.PropertyType))
@@ -129,14 +201,86 @@ public class TypeDefinitionBuilder
                 continue;
             }
 
-            var annotation = property.GetCustomAttributes<TypePropertyAttribute>(true).FirstOrDefault();
+            var annotation = property.GetCustomAttributes<TypePropertyAttribute>(true).FirstOrDefault()
+                             ?? new TypePropertyAttribute(null);
+            var isNullable = annotation?.IsNullable ?? false;
+            var minimumLengthAttribute = property.GetCustomAttribute<MinLengthAttribute>(false);
+            var maximumLengthAttribute = property.GetCustomAttribute<MaxLengthAttribute>(false);
+            var patternAttribute = property.GetCustomAttribute<BicepStringPatternAttribute>(false);
+            annotation?.MergeStringPropertyAttribute(maximumLengthAttribute, minimumLengthAttribute, patternAttribute);
+
             var propertyType = property.PropertyType;
+            //We will generate nullable generics as non-nullable and convert it into a union type with NullType
+            if (propertyType.IsGenericType
+                && propertyType.GetGenericTypeDefinition() == typeof(Nullable<>)
+                && propertyType.GetGenericArguments()[0].IsEnum is false)
+            {
+                propertyType = propertyType.GetGenericArguments()[0];
+                //We ignore strings since we cannot differentiate from string and string?
+                //Nullability must be set through the necessary attribute for strings
+                if (propertyType != typeof(string))
+                {
+                    isNullable = true;
+                }
+            }
 
             TypeBase? typeReference = null;
 
             if (!TryResolveTypeReference(propertyType, annotation, out typeReference))
             {
-                if (propertyType != typeof(string) && typeof(IEnumerable).IsAssignableFrom(propertyType))
+                if (propertyType.IsGenericType && propertyType.GetGenericTypeDefinition() == typeof(Dictionary<,>))
+                {
+                    visited.Add(propertyType);
+                    var genericArguments = propertyType.GetGenericArguments();
+                    if (genericArguments.Length != 2)
+                    {
+                        throw new ArgumentException("Dictionary must have exactly two generic arguments");
+                    }
+
+                    if (genericArguments[0] != typeof(string))
+                    {
+                        throw new ArgumentException("Dictionary must have a string as key");
+                    }
+
+                    var valueType = genericArguments[1];
+                    ITypeReference additionalPropertiesReference;
+                    if (!valueType.IsPrimitive && valueType != typeof(string))
+                    {
+                        additionalPropertiesReference =
+                            factory.AddOrGetReference(typeCache.GetOrAdd(valueType, _ => GenerateForRecord(factory, typeCache, valueType)));
+                    }
+                    else
+                    {
+                        if (valueType == typeof(bool))
+                        {
+                            additionalPropertiesReference = factory.AddOrGetReference(
+                                new BooleanType()
+                            );
+                        }
+                        else if (valueType == typeof(int))
+                        {
+                            additionalPropertiesReference = factory.AddOrGetReference(
+                                new IntegerType());
+                        }
+                        else
+                        {
+                            additionalPropertiesReference = factory.AddOrGetReference(
+                                new StringType(
+                                    annotation?.IsSecure,
+                                    annotation?.MinLength,
+                                    annotation?.MaxLength,
+                                    annotation?.Pattern
+                                ));
+                        }
+                    }
+
+                    var typeName = $"Dictionary<string, {valueType.Name}>";
+                    typeReference = factory.AddOrGetReference(typeCache.GetOrAdd(type, _ => new ObjectType(typeName,
+                        new Dictionary<string, ObjectTypeProperty>(),
+                        additionalPropertiesReference))).Type;
+                }
+
+                else if (propertyType != typeof(string) && typeof(IEnumerable).IsAssignableFrom(propertyType))
                 {
                     // protect against infinite recursion
                     visited.Add(property.PropertyType);
@@ -171,8 +315,8 @@ public class TypeDefinitionBuilder
                     typeReference = typeCache.GetOrAdd(propertyType, _ => factory.Create(() => GenerateForRecord(factory, typeCache, propertyType)));
                 }
                 else if (propertyType.IsGenericType &&
-                    propertyType.GetGenericTypeDefinition() == typeof(Nullable<>) &&
-                    propertyType.GetGenericArguments()[0] is { IsEnum: true } enumType)
+                         propertyType.GetGenericTypeDefinition() == typeof(Nullable<>) &&
+                         propertyType.GetGenericArguments()[0] is { IsEnum: true } enumType)
                 {
                     var enumMembers = enumType.GetEnumNames()
                         .Select(x => factory.Create(() => new StringLiteralType(x)))
@@ -181,16 +325,26 @@ public class TypeDefinitionBuilder
 
                     typeReference = typeCache.GetOrAdd(propertyType, _ => factory.Create(() => new UnionType(enumMembers)));
                 }
+
                 else
                 {
                     throw new NotImplementedException($"Unsupported property type {propertyType}");
                 }
             }
 
+            if (isNullable)
+            {
+                var unionType = factory.AddOrGetReference(new UnionType([
+                    factory.GetReference(typeReference),
+                    factory.AddOrGetReference(new NullType())
+                ]));
+                typeReference = unionType.Type;
+            }
+
             typeProperties[CamelCase(property.Name)] = new ObjectTypeProperty(
-            factory.GetReference(typeReference),
-            annotation?.Flags ?? ObjectTypePropertyFlags.None,
-            annotation?.Description);
+                factory.GetReference(typeReference),
+                annotation?.Flags ?? ObjectTypePropertyFlags.None,
+                annotation?.Description);
         }
 
         return new ObjectType(
@@ -202,9 +356,14 @@ public class TypeDefinitionBuilder
     private bool TryResolveTypeReference(Type type, TypePropertyAttribute? annotation, [NotNullWhen(true)] out TypeBase? typeReference)
     {
         typeReference = null;
-        if (type == typeof(string) && annotation?.IsSecure == true)
+        if (type == typeof(string))
         {
-            typeReference = typeCache.GetOrAdd(type, _ => factory.Create(() => new StringType(sensitive: true)));
+            //TODO: Find a way to make it compatible with the type cache
+            typeReference = factory.AddOrGetReference(new StringType(
+                sensitive: annotation?.IsSecure,
+                minLength: annotation?.MinLength,
+                maxLength: annotation?.MaxLength,
+                pattern: annotation?.Pattern)).Type;
         }
         else if (typeToTypeBaseMap.TryGetValue(type, out var typeFunc))
         {

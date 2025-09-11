@@ -5,13 +5,16 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.ComponentModel.DataAnnotations;
 using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Azure.Bicep.Types.Concrete;
 using Azure.Bicep.Types.Index;
 using Bicep.Core.Registry.Catalog.Implementation.PrivateRegistries;
 using Bicep.Core.UnitTests.Mock;
 using Bicep.Local.Extension.Types;
+using Bicep.Local.Extension.Types.Attributes;
 using FluentAssertions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Moq;
@@ -32,6 +35,7 @@ public class TypeDefinitionBuilderTests
     private TypeFactory CreateTypeFactory() => new([]);
 
     #region Constructor Tests
+
     [TestMethod]
     public void Constructor_Throws_On_Empty_TypeToTypeBaseMap()
     {
@@ -155,5 +159,259 @@ public class TypeDefinitionBuilderTests
         result.Should().NotBeNull();
         result.TypeFileContents.Values.Single().Should().Contain("EnumerableResource");
         result.TypeFileContents.Values.Single().Should().Contain("items", because: "the enumerable property should be present in the resource type definition");
+    }
+
+    [JsonPolymorphic(TypeDiscriminatorPropertyName = "configurationType"),
+     JsonDerivedType(typeof(BarConfiguration), "bar"),
+     JsonDerivedType(typeof(BazConfiguration), "baz")]
+    private record DerivedConfiguration(
+        string Foo
+    );
+
+    private record BarConfiguration(
+        string Bar);
+
+    private record BazConfiguration(
+        string Baz);
+
+    [TestMethod]
+    public void GenerateTypeDefinition_Emits_DiscriminatorType_For_JsonPolymorphic_DerivedType_Attributes()
+    {
+        var settings = CreateTypeSettings();
+        var factory = CreateTypeFactory();
+        var typeProviderMock = StrictMock.Of<ITypeProvider>();
+        typeProviderMock.Setup(tp => tp.GetResourceTypes(true)).Returns([(typeof(SimpleResource), new(nameof(SimpleResource)))]);
+        var map = new Dictionary<Type, Func<TypeBase>> { { typeof(string), () => new StringType() } };
+
+        var builder = new TypeDefinitionBuilder("TestSettings", "2025-01-01", true, typeof(DerivedConfiguration), factory, typeProviderMock.Object, map);
+
+        var result = builder.GenerateTypeDefinition();
+
+        result.Should().NotBeNull();
+        result.TypeFileContents.Values.Single().Should().Contain(nameof(DerivedConfiguration));
+        result.TypeFileContents.Values.Single().Should().Contain(nameof(BazConfiguration));
+        result.TypeFileContents.Values.Single().Should().Contain(nameof(BarConfiguration));
+        result.TypeFileContents.Values.Single().Should().Contain("baseProperties", because: "the base properties should be present in the resource type definition");
+        result.TypeFileContents.Values.Single().Should().Contain("elements", because: "a discriminated type should posses inheriting types");
+    }
+
+    private record BasicType(string value);
+
+    private record BasicTypeDictionaryContainer
+    {
+        public required Dictionary<string, BasicType> Items { get; set; }
+    }
+
+    private record IntegerDictionaryContainer
+    {
+        public required Dictionary<string, int> Items { get; set; }
+    }
+
+    private record StringDictionaryContainer
+    {
+        [BicepStringPattern("SomePattern")] public required Dictionary<string, string> Items { get; set; }
+    }
+
+    [TestMethod]
+    [DataRow(typeof(BasicTypeDictionaryContainer), nameof(BasicType))]
+    [DataRow(typeof(IntegerDictionaryContainer), nameof(Int32))]
+    [DataRow(typeof(StringDictionaryContainer), nameof(String))]
+    public void GenerateTypeDefinition_Emits_DictionaryType(Type typeToSerialize, string nameOfDictionaryValueType)
+    {
+        var factory = CreateTypeFactory();
+        var typeProviderMock = StrictMock.Of<ITypeProvider>();
+        typeProviderMock.Setup(tp => tp.GetResourceTypes(true)).Returns([(typeof(SimpleResource), new(nameof(SimpleResource)))]);
+        var map = new Dictionary<Type, Func<TypeBase>> { { typeof(string), () => new StringType() } };
+
+        var builder = new TypeDefinitionBuilder("TestSettings", "2025-01-01", true, typeToSerialize, factory, typeProviderMock.Object, map);
+
+        var result = builder.GenerateTypeDefinition();
+
+        result.Should().NotBeNull();
+
+        var jsonDocument = JsonDocument.Parse(result.TypeFileContents.Values.Single());
+
+        var dictionaryIsSerialized = jsonDocument.RootElement.EnumerateArray()
+            .Any(e => e.GetProperty("$type").GetString() == nameof(ObjectType)
+                      && e.GetProperty("name").GetString()?.Contains("Dictionary") == true
+                      && e.GetProperty("name").GetString()?.Contains(nameOfDictionaryValueType) == true);
+
+        dictionaryIsSerialized.Should().BeTrue();
+    }
+
+    [TestMethod]
+    public void GenerateTypeDefinition_Emits_DictionaryType_WithStringPattern()
+    {
+        var factory = CreateTypeFactory();
+        var typeProviderMock = StrictMock.Of<ITypeProvider>();
+        typeProviderMock.Setup(tp => tp.GetResourceTypes(true)).Returns([(typeof(SimpleResource), new(nameof(SimpleResource)))]);
+        var map = new Dictionary<Type, Func<TypeBase>> { { typeof(string), () => new StringType() } };
+
+        var builder = new TypeDefinitionBuilder("TestSettings", "2025-01-01", true, typeof(StringDictionaryContainer), factory, typeProviderMock.Object, map);
+
+        var result = builder.GenerateTypeDefinition();
+
+        result.Should().NotBeNull();
+
+        var jsonDocument = JsonDocument.Parse(result.TypeFileContents.Values.Single());
+
+        var customizedStringExists = jsonDocument.RootElement.EnumerateArray()
+            .Any(e => e.GetProperty("$type").GetString() == nameof(StringType)
+                      && e.GetProperty("pattern").ValueKind == JsonValueKind.String
+                      && e.GetProperty("pattern").GetString() == "SomePattern");
+
+        customizedStringExists.Should().BeTrue();
+    }
+
+    private record StringWithAttributes(string Foo)
+    {
+        [MaxLength(10)]
+        [MinLength(5)]
+        [BicepStringPattern("SomePattern")]
+        public required string Foo { get; set; } = Foo;
+    }
+
+    [TestMethod]
+    [DataRow(10, 5, "SomePattern", typeof(StringWithAttributes))]
+    public void GenerateTypeDefinition_Emits_String_WithAttributes(int maxLength, int minLength, string regexPattern, Type typeToSerialize)
+    {
+        var factory = CreateTypeFactory();
+        var typeProviderMock = StrictMock.Of<ITypeProvider>();
+        typeProviderMock.Setup(tp => tp.GetResourceTypes(true)).Returns([(typeof(SimpleResource), new(nameof(SimpleResource)))]);
+        var map = new Dictionary<Type, Func<TypeBase>> { { typeof(string), () => new StringType() } };
+
+        var builder = new TypeDefinitionBuilder("TestSettings", "2025-01-01", true, typeToSerialize, factory, typeProviderMock.Object, map);
+
+        var result = builder.GenerateTypeDefinition();
+
+        result.Should().NotBeNull();
+
+        var jsonDocument = JsonDocument.Parse(result.TypeFileContents.Values.Single());
+
+        var customizedStringExists = jsonDocument.RootElement.EnumerateArray()
+            .Any(e => e.GetProperty("$type").GetString() == nameof(StringType)
+                      && e.GetProperty("minLength").ValueKind == JsonValueKind.Number && e.GetProperty("minLength").GetInt32() == minLength
+                      && e.GetProperty("maxLength").ValueKind == JsonValueKind.Number && e.GetProperty("maxLength").GetInt32() == maxLength
+                      && e.GetProperty("pattern").ValueKind == JsonValueKind.String && e.GetProperty("pattern").GetString() == regexPattern);
+
+        customizedStringExists.Should().BeTrue();
+    }
+
+    private record NullableInteger(
+        [property: TypeProperty(null, isNullable: true)]
+        int? NullableIntegerProperty);
+
+    private record NullableBool(
+        bool? NullableBoolProperty);
+
+    private record NullableString(
+        [property: TypeProperty(null, isNullable: true)]
+        string? NullableStringProperty);
+
+    private record NullableObject(
+        [property: TypeProperty(null, isNullable: true)]
+        ArrayResource? NullableObjectProperty);
+
+    [TestMethod]
+    [DataRow(typeof(NullableInteger))]
+    [DataRow(typeof(NullableBool))]
+    [DataRow(typeof(NullableString))]
+    [DataRow(typeof(NullableObject))]
+    public void GenerateTypeDefinition_Emits_Nullable_Types(Type nullableType)
+    {
+        var factory = CreateTypeFactory();
+        var typeProviderMock = StrictMock.Of<ITypeProvider>();
+        typeProviderMock.Setup(tp => tp.GetResourceTypes(true)).Returns([(typeof(SimpleResource), new(nameof(SimpleResource)))]);
+        var map = new Dictionary<Type, Func<TypeBase>>
+        {
+            { typeof(string), () => new StringType() },
+            { typeof(int), () => new IntegerType() },
+            { typeof(bool), () => new BooleanType() },
+        };
+
+        var builder = new TypeDefinitionBuilder("TestSettings", "2025-01-01", true, nullableType, factory, typeProviderMock.Object, map);
+
+        var result = builder.GenerateTypeDefinition();
+
+        result.Should().NotBeNull();
+
+        var jsonDocument = JsonDocument.Parse(result.TypeFileContents.Values.Single());
+
+        var unionTypeExists = jsonDocument.RootElement.EnumerateArray()
+            .Any(e => e.EnumerateObject()
+                .Any(o => o.NameEquals("$type")
+                          && o.Value.GetString() == nameof(UnionType)));
+
+        unionTypeExists.Should().BeTrue();
+    }
+
+    public enum OperationType
+    {
+        Uppercase,
+        Lowercase,
+        Reverse,
+    }
+
+    public record EnumContainer(
+        [property: TypeProperty(null, isNullable: true)]
+        OperationType? Operation);
+
+    [TestMethod]
+    public void GenerateTypeDefinition_Emits_Nullable_Enum_Types()
+    {
+        var factory = CreateTypeFactory();
+        var typeProviderMock = StrictMock.Of<ITypeProvider>();
+        typeProviderMock.Setup(tp => tp.GetResourceTypes(true)).Returns([(typeof(SimpleResource), new(nameof(SimpleResource)))]);
+        var map = new Dictionary<Type, Func<TypeBase>> { { typeof(string), () => new StringType() }, { typeof(int), () => new IntegerType() } };
+
+        var builder = new TypeDefinitionBuilder("TestSettings", "2025-01-01", true, typeof(EnumContainer), factory, typeProviderMock.Object, map);
+
+        var result = builder.GenerateTypeDefinition();
+
+        result.Should().NotBeNull();
+
+        var jsonDocument = JsonDocument.Parse(result.TypeFileContents.Values.Single());
+
+        var stringLiteralCount = jsonDocument.RootElement.EnumerateArray()
+            .Count(e => e.EnumerateObject()
+                .Any(o => o.NameEquals("$type")
+                          && o.Value.GetString() == nameof(StringLiteralType)));
+
+        var enumElementsCount = Enum.GetNames(typeof(OperationType)).Length;
+
+        stringLiteralCount.Should().Be(enumElementsCount);
+
+        var nullableTypeExists = jsonDocument.RootElement.EnumerateArray()
+            .Any(e => e.GetProperty("$type").GetString() == nameof(NullType));
+
+        nullableTypeExists.Should().Be(true);
+    }
+
+    public record ArrayObjectItem(string foo);
+
+    public record ArrayObjectContainer(ArrayObjectItem[] fooItems);
+
+    [TestMethod]
+    public void GenerateTypeDefinition_Emits_Object_Array_Types()
+    {
+        var factory = CreateTypeFactory();
+        var typeProviderMock = StrictMock.Of<ITypeProvider>();
+        typeProviderMock.Setup(tp => tp.GetResourceTypes(true)).Returns([(typeof(SimpleResource), new(nameof(SimpleResource)))]);
+        var map = new Dictionary<Type, Func<TypeBase>> { { typeof(string), () => new StringType() }, { typeof(int), () => new IntegerType() } };
+
+        var builder = new TypeDefinitionBuilder("TestSettings", "2025-01-01", true, typeof(ArrayObjectContainer), factory, typeProviderMock.Object, map);
+
+        var result = builder.GenerateTypeDefinition();
+
+        result.Should().NotBeNull();
+
+        var jsonDocument = JsonDocument.Parse(result.TypeFileContents.Values.Single());
+
+        var arrayIsSerialized = jsonDocument.RootElement.EnumerateArray()
+            .Any(e => e.EnumerateObject()
+                .Any(o => o.NameEquals("name")
+                          && o.Value.GetString() == nameof(ArrayObjectContainer)));
+
+        arrayIsSerialized.Should().BeTrue();
     }
 }
