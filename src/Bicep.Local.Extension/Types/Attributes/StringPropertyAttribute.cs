@@ -4,34 +4,18 @@
 namespace Bicep.Local.Extension.Types.Attributes;
 
 [AttributeUsage(AttributeTargets.Property)]
-public class BicepStringMaxLengthAttribute : Attribute
-{
-    public int MaxLength { get; }
-
-    public BicepStringMaxLengthAttribute(int maxLength)
-    {
-        MaxLength = maxLength;
-    }
-}
-
-[AttributeUsage(AttributeTargets.Property)]
-public class BicepStringMinLengthAttribute : Attribute
-{
-    public int MinLength { get; }
-
-    public BicepStringMinLengthAttribute(int minLength)
-    {
-        MinLength = minLength;
-    }
-}
-
-[AttributeUsage(AttributeTargets.Property)]
 public class BicepStringPatternAttribute : Attribute
 {
-    public string Regex { get; }
+    /// <summary>
+    /// Gets the regex patter to apply during bicep compile-time validation for the bicep string
+    /// </summary>
+    public string Value { get; }
 
-    public BicepStringPatternAttribute(string regex)
+    /// <summary>
+    /// The regex validation pattern to be applied to the string
+    /// </summary>
+    public BicepStringPatternAttribute(string value)
     {
-        Regex = regex;
+        Value = value;
     }
 }
