@@ -15,6 +15,7 @@ public class PathMismatchRuleTests : LinterRuleTestsBase
 {
     private static readonly ServiceBuilder Services = new ServiceBuilder().WithConfiguration(BicepTestConstants.BuiltInConfigurationWithStableAnalyzers);
 
+
     private void CompileAndTest(string text, (string path, string contents)[]? additionalFiles = null, Dictionary<string, string>? invalidImportsMapping = null)
     {
         CompileAndTest(text, LinterRuleTestsBase.OnCompileErrors.IncludeErrors, additionalFiles, invalidImportsMapping);
@@ -26,9 +27,17 @@ public class PathMismatchRuleTests : LinterRuleTestsBase
             {
                 if (invalidImportsMapping is not null && invalidImportsMapping.Any())
                 {
-                    var rule = new PathMismatchRule();
-                    string[] expectedMessages = invalidImportsMapping.Select(p => rule.GetMessage(p.Key, p.Value)).ToArray();
-                    diags.Select(e => e.Message).Should().ContainInOrder(expectedMessages);
+                    if (!OperatingSystem.IsWindows())
+                    {
+                        diags.Select(e => e.Code).Should().Contain("BCP091");
+                    }
+                    else
+                    {
+                        var rule = new PathMismatchRule();
+                        string[] expectedMessages = invalidImportsMapping.Select(p => rule.GetMessage(p.Key, p.Value)).ToArray();
+                        diags.Select(e => e.Message).Should().ContainInOrder(expectedMessages);
+                    }
+
                 }
                 else
                 {

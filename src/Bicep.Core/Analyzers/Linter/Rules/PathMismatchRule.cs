@@ -52,13 +52,13 @@ namespace Bicep.Core.Analyzers.Linter.Rules
             foreach (var sym in imports)
             {
 
-                if (sym.SourceModel is SemanticModel sm)
+                if (sym.SourceModel is SemanticModel sm  && sym.EnclosingDeclaration.FromClause is CompileTimeImportFromClauseSyntax fromClause)
                 {
                     if (sym.Context.SourceFileLookup.ArtifactLookup.Any(a => a.Key == sym.EnclosingDeclaration  && a.Value.Reference is not LocalModuleReference))
                     {
                         continue;
                     }
-                    foreach (var diagnostic in GetPathMismatchDiagnostics(sm.SourceFile.FileHandle, rootIoUri, diagnosticLevel, sym.DeclaringSyntax.Span))
+                    foreach (var diagnostic in GetPathMismatchDiagnostics(sm.SourceFile.FileHandle, rootIoUri, diagnosticLevel, fromClause.Path.Span))
                     {
                         yield return diagnostic;
                     }
@@ -71,9 +71,9 @@ namespace Bicep.Core.Analyzers.Linter.Rules
                 {
                     continue;
                 }
-                if (sym.SourceModel is SemanticModel sm)
+                if (sym.SourceModel is SemanticModel sm && sym.EnclosingDeclaration.FromClause is CompileTimeImportFromClauseSyntax fromClause)
                 {
-                    foreach (var diagnostic in GetPathMismatchDiagnostics(sm.SourceFile.FileHandle, rootIoUri, diagnosticLevel, sym.DeclaringSyntax.Span))
+                    foreach (var diagnostic in GetPathMismatchDiagnostics(sm.SourceFile.FileHandle, rootIoUri, diagnosticLevel, fromClause.Path.Span))
                     {
                         yield return diagnostic;
                     }
