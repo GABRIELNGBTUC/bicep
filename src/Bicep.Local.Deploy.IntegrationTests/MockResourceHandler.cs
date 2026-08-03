@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using Bicep.Local.Extension.Host;
 using Bicep.Local.Extension.Host.Handlers;
 using Bicep.Local.Extension.Types.Attributes;
@@ -31,10 +32,31 @@ public class MockResourceHandler : TypedResourceHandler<MockResourceHandler.Prop
         public required Metadata Metadata { get; set; }
     }
 
+    [JsonPolymorphic(TypeDiscriminatorPropertyName = "kubeConfigSource")]
+    [JsonDerivedType(typeof(ManualConfig), "Manual")]
+    [JsonDerivedType(typeof(AutomaticConfig), "Kubectl")]
     public class Config
     {
-        public required string KubeConfig { get; set; }
         public string? Namespace { get; set; }
+    }
+
+    public class ManualConfig : Config
+    {
+        [TypeProperty(description: "When set to manual, provide the path to your kubeconfig. " +
+                                   "Else, it will be retrieved automatically from the current kubectl context.")]
+        public required string KubeConfig { get; set; }
+
+        public ManualConfig(string kubeConfig)
+        {
+            KubeConfig = kubeConfig;
+        }
+    }
+
+    public class AutomaticConfig : Config
+    {
+        public AutomaticConfig()
+        {
+        }
     }
 
     public Func<ResourceRequest, CancellationToken, ResourceResponse>? OnCreateOrUpdate { get; set; }

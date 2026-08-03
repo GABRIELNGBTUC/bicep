@@ -95,11 +95,14 @@ public class ProviderExtensionTests : TestBase
 
     private static IEnumerable<object[]> GetDataSets()
     {
-        yield return new object[] { ChannelMode.UnixDomainSocket };
+        yield return new object[] { ChannelMode.UnixDomainSocket, "Manual" };
+        yield return new object[] { ChannelMode.UnixDomainSocket, "Kubectl" };
+
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
             // Kestrel only supports named pipes on Windows
-            yield return new object[] { ChannelMode.NamedPipe };
+            yield return new object[] { ChannelMode.NamedPipe, "Manual" };
+            yield return new object[] { ChannelMode.NamedPipe, "Kubectl" };
         }
     }
 
@@ -111,7 +114,7 @@ public class ProviderExtensionTests : TestBase
 
     [TestMethod]
     [DynamicData(nameof(GetDataSets), DynamicDataSourceType.Method)]
-    public async Task Save_request_works_as_expected(ChannelMode mode)
+    public async Task Save_request_works_as_expected(ChannelMode mode, string kubeConfigSource)
     {
         string[] processArgs;
         Func<GrpcChannel> channelBuilder;
@@ -138,7 +141,20 @@ public class ProviderExtensionTests : TestBase
                 req.Type.Should().Be("apps/Deployment");
                 req.ApiVersion.Should().Be("v1");
                 req.Properties.Should().NotBeNull();
-                req.Config.KubeConfig.Should().Be("redacted");
+
+                switch (kubeConfigSource)
+                {
+                    case "Manual":
+                        req.Config.Should().BeOfType<MockResourceHandler.ManualConfig>().As<MockResourceHandler.ManualConfig>();
+                        req.Config.As<MockResourceHandler.ManualConfig>().KubeConfig.Should().Be("redacted");
+                        break;
+                    case "Kubectl":
+                        req.Config.Should().BeOfType<MockResourceHandler.AutomaticConfig>();
+                        break;
+                    default:
+                        throw new NotImplementedException();
+                }
+
                 req.Config.Namespace.Should().Be("default");
 
                 return new MockResourceHandler.ResourceResponse
@@ -160,16 +176,31 @@ public class ProviderExtensionTests : TestBase
             builder => builder.WithResourceHandler(handler),
             async (client, token) =>
             {
-                var request = new Rpc.ResourceSpecification
+                var config = kubeConfigSource switch
                 {
-                    ApiVersion = handler.ApiVersion,
-                    Type = handler.Type,
-                    Config = """
+                    "Manual" =>
+                        """
                         {
+                            "kubeConfigSource": "Manual",
                             "kubeConfig": "redacted",
                             "namespace": "default"
                         }
                         """,
+                    "Kubectl" =>
+                        """
+                        {
+                            "kubeConfigSource": "Kubectl",
+                            "namespace": "default"
+                        }
+                        """,
+                    _ => throw new NotImplementedException(),
+                };
+
+                var request = new Rpc.ResourceSpecification
+                {
+                    ApiVersion = handler.ApiVersion,
+                    Type = handler.Type,
+                    Config = config,
                     Properties = """
                         {
                           "metadata": {

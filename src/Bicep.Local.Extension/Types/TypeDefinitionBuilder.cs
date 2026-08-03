@@ -8,6 +8,7 @@ using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using System.Text;
+using System.Text.Json.Serialization;
 using Azure.Bicep.Types;
 using Azure.Bicep.Types.Concrete;
 using Azure.Bicep.Types.Index;
@@ -231,6 +232,16 @@ public class TypeDefinitionBuilder : ITypeDefinitionBuilder
             return AddType(type, new ArrayType(elementTypeReference));
         }
 
+        if (type.IsClass && type.GetCustomAttribute<JsonPolymorphicAttribute>() is { } polymorphicAttribute
+            && type.GetCustomAttributes<JsonDerivedTypeAttribute>() is { } derivedTypesAttribute)
+        {
+            var discriminatorType = GenerateForDiscriminatedType(type, polymorphicAttribute, derivedTypesAttribute);
+            var discriminatorTypeReference = AddOrGetReference(discriminatorType);
+            typeCache[type] = discriminatorTypeReference;
+
+            return discriminatorTypeReference;
+        }
+
         if (type.IsClass)
         {
             return GenerateForRecord(type);
@@ -249,7 +260,7 @@ public class TypeDefinitionBuilder : ITypeDefinitionBuilder
         return null;
     }
 
-    private ITypeReference GenerateForRecord(Type type)
+    private ITypeReference GenerateForRecord(Type type, bool cacheInTypeCache = true)
     {
         var typeProperties = new Dictionary<string, ObjectTypeProperty>();
 
@@ -272,7 +283,7 @@ public class TypeDefinitionBuilder : ITypeDefinitionBuilder
         return AddType(type, new ObjectType(
             $"{type.Name}",
             typeProperties,
-            null));
+            null), doNotCache: !cacheInTypeCache);
     }
 
     private string GetString(Action<Stream> streamWriteFunc)
@@ -281,6 +292,83 @@ public class TypeDefinitionBuilder : ITypeDefinitionBuilder
         streamWriteFunc(memoryStream);
 
         return Encoding.UTF8.GetString(memoryStream.ToArray());
+    }
+
+    private TypeBase GenerateForDiscriminatedType(Type type,
+        JsonPolymorphicAttribute polymorphicAttribute, IEnumerable<JsonDerivedTypeAttribute> derivedTypeAttributes)
+    {
+        // Build the base object shape without caching it under the polymorphic CLR type.
+        var baseProperties = GenerateForRecord(type, cacheInTypeCache: false).Type as ObjectType;
+        var discriminatorName = polymorphicAttribute.TypeDiscriminatorPropertyName;
+        if (discriminatorName is null)
+        {
+            throw new InvalidOperationException($"Discriminator name for type {type} cannot be null.");
+        }
+        var childTypesDictionary = new Dictionary<string, ITypeReference>();
+
+        foreach (var derivedType in derivedTypeAttributes)
+        {
+            string? typeDiscriminator = derivedType.TypeDiscriminator?.ToString();
+            if(type.GetProperties().Any(p => p.Name == discriminatorName))
+            {
+                throw new InvalidOperationException($"The discriminator property '{discriminatorName}' cannot be defined in the base type '{type}'. It is reserved for the polymorphic type system.");
+            }
+            if (typeDiscriminator is null)
+            {
+                throw new ArgumentNullException(nameof(derivedType.TypeDiscriminator),
+                    "The type discriminator property from JsonDerivedTypeAttribute cannot be null.");
+            }
+            typeCache.TryAdd(derivedType.DerivedType,
+                GenerateForRecord(derivedType.DerivedType));
+            typeCache.TryGetValue(derivedType.DerivedType, out var discriminatedTypeProperties);
+            if (discriminatedTypeProperties is null)
+            {
+                throw new InvalidOperationException($"Discriminated type {derivedType.DerivedType} cannot be null.");
+            }
+            var concreteDiscriminatedTypeProperties = (ObjectType)discriminatedTypeProperties.Type;
+            var discriminatorTypeReference =
+                AddOrGetReference(new StringLiteralType(typeDiscriminator));
+            var newProperties = concreteDiscriminatedTypeProperties.Properties
+                .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+
+            foreach (var basePropertyName in baseProperties!.Properties.Keys)
+            {
+                if (!string.Equals(basePropertyName, discriminatorName, StringComparison.Ordinal))
+                {
+                    newProperties.Remove(basePropertyName);
+                }
+            }
+
+            newProperties[discriminatorName] = new ObjectTypeProperty(
+                discriminatorTypeReference,
+                ObjectTypePropertyFlags.Required,
+                "The discriminator for derived types.");
+
+            var newObjectType = new ObjectType(concreteDiscriminatedTypeProperties.Name,
+                newProperties
+                    .ToImmutableDictionary(),
+                concreteDiscriminatedTypeProperties.AdditionalProperties);
+
+            childTypesDictionary.Add(derivedType.DerivedType.Name, AddOrGetReference(newObjectType));
+        }
+        return new DiscriminatedObjectType(
+            type.Name,
+            discriminatorName,
+            baseProperties!.Properties,
+            childTypesDictionary);
+    }
+
+    private ITypeReference AddOrGetReference(TypeBase type)
+    {
+        try
+        {
+            var typeBase = factory.Create(() => type);
+            return factory.GetReference(typeBase);
+        }
+        catch (ArgumentException)
+        {
+            return factory.GetReference(type);
+        }
     }
 
     private static string CamelCase(string input)

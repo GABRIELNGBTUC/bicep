@@ -3,6 +3,7 @@
 
 using System.Collections.Frozen;
 using System.Collections.Immutable;
+using System.Text.Json.Serialization;
 using Azure.Bicep.Types.Index;
 using Bicep.Core.Resources;
 using Bicep.Core.TypeSystem;
@@ -85,6 +86,44 @@ public class TypeDefinitionBuilderTests
         public bool? NullableBoolProp { get; init; }
         [TypeProperty("Secure string", isSecure: true)]
         public string SecureStringProp { get; init; } = "";
+    }
+
+    [JsonPolymorphic(TypeDiscriminatorPropertyName = "DiscriminatingProperty")]
+    [JsonDerivedType(typeof(DiscriminatedResourceA), "A")]
+    [JsonDerivedType(typeof(DiscriminatedResourceB), "B")]
+
+    private record DiscriminatedResource
+    {
+    }
+
+    private record DiscriminatedResourceA : DiscriminatedResource
+    {
+        public DiscriminatedResourceA() : base()
+        {
+        }
+    }
+
+    private record DiscriminatedResourceB : DiscriminatedResource
+    {
+        public int SomeOtherProperty { get; init; }
+        public DiscriminatedResourceB() : base()
+        {
+        }
+    }
+
+    [JsonPolymorphic(TypeDiscriminatorPropertyName = "DiscriminatingProperty")]
+    [JsonDerivedType(typeof(InvalidDiscriminatedResourceA), "A")]
+    private record InvalidDiscriminatedResource
+    {
+        public required string DiscriminatingProperty { get; init; }
+    }
+
+    private record InvalidDiscriminatedResourceA : InvalidDiscriminatedResource
+    {
+        public InvalidDiscriminatedResourceA()
+        {
+            DiscriminatingProperty = "A";
+        }
     }
 
     private static IResourceTypeLoader GenerateTypes(TypeDefinitionBuilder builder)
@@ -214,6 +253,46 @@ public class TypeDefinitionBuilderTests
                 x => x.Type.Should().BeOfType<NullType>());
         body.Properties["secureStringProp"].TypeReference.Type.Should().BeOfType<StringType>()
             .Which.ValidationFlags.Should().HaveFlag(TypeSymbolValidationFlags.IsSecure);
+    }
+
+    [TestMethod]
+    public void GenerateTypeDefinition_handles_discriminated_types()
+    {
+        var resourceType = CreateResourceType(typeof(DiscriminatedResource), nameof(DiscriminatedResource));
+
+        var body = resourceType.Body.Type.Should().BeOfType<DiscriminatedObjectType>().Subject;
+        body.DiscriminatorKey.Should().Be("DiscriminatingProperty");
+        body.UnionMembersByKey.Count.Should().Be(2);
+        body.DiscriminatorProperty.Name.Should().Be("DiscriminatingProperty");
+        body.DiscriminatorProperty.TypeReference.Type.Should().BeOfType<UnionType>();
+        body.DiscriminatorProperty.TypeReference.As<UnionType>().Members.Should().HaveCount(2);
+        body.DiscriminatorProperty.TypeReference.As<UnionType>().Members.Should().AllBeOfType<StringLiteralType>();
+
+
+        body.UnionMembersByKey["'A'"].Name.Should().Be(nameof(DiscriminatedResourceA));
+        body.UnionMembersByKey["'A'"].Properties.Should().HaveCount(1);
+        body.UnionMembersByKey["'A'"].Properties.First().Value.TypeReference.Type.Should().BeOfType<StringLiteralType>();
+        body.UnionMembersByKey["'A'"].Properties.First().Value.TypeReference.Type
+            .As<StringLiteralType>().RawStringValue.Should().Be("A");
+
+        body.UnionMembersByKey["'B'"].Name.Should().Be(nameof(DiscriminatedResourceB));
+        body.UnionMembersByKey["'B'"].Properties.Should().HaveCount(2);
+        body.UnionMembersByKey["'B'"].Properties
+            .FirstOrDefault(t => t.Value.TypeReference.Type is StringLiteralType).Should().NotBeNull();
+        var discriminatorPropertyB = body.UnionMembersByKey["'B'"].Properties
+            .FirstOrDefault(t => t.Value.TypeReference.Type is StringLiteralType).Value
+            .As<NamedTypeProperty>();
+        discriminatorPropertyB.TypeReference.Type.As<StringLiteralType>()
+            .RawStringValue.Should().Be("B");
+        body.UnionMembersByKey["'B'"].Properties
+            .FirstOrDefault(t => t.Value.TypeReference.Type is IntegerType).Value
+            .As<NamedTypeProperty>().TypeReference.Type.Should().NotBeNull();
+    }
+
+    [TestMethod]
+    public void GeneratedTypeDefinition_throws_on_invalid_discriminator_definition()
+    {
+        Assert.ThrowsExactly<InvalidOperationException>(() => CreateResourceType(typeof(InvalidDiscriminatedResource), nameof(InvalidDiscriminatedResource)));
     }
 
     #region JSON Structure Validation Tests
