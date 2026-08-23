@@ -6,11 +6,7 @@ import { LanguageClient } from "vscode-languageclient/node";
 import { CommandManager } from "../../infrastructure/commands";
 import { DiagnosticsRouter } from "../../infrastructure/language-client";
 import { Disposable } from "../../infrastructure/lifecycle";
-import {
-  ShowSourceFromVisualizerCommand,
-  ShowVisualizerCommand,
-  ShowVisualizerToSideCommand,
-} from "./commands";
+import { ShowSourceFromVisualizerCommand, ShowVisualizerCommand, ShowVisualizerToSideCommand } from "./commands";
 import { BicepVisualizerViewManager } from "./visualizer-view-manager";
 
 export async function activateVisualizationFeature(

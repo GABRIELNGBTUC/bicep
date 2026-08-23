@@ -15,6 +15,11 @@ import {
 import * as fse from "fs-extra";
 import vscode, { commands, Uri } from "vscode";
 import { LanguageClient, TextDocumentIdentifier } from "vscode-languageclient/node";
+import { Command } from "../../infrastructure/commands";
+import { findOrCreateActiveBicepFile } from "../../infrastructure/editor";
+import { OutputChannelManager } from "../../infrastructure/logging";
+import { minutesToMs } from "../../infrastructure/timing";
+import { AzurePickers } from "./azure/azure-pickers";
 import {
   BicepDeploymentParametersResponse,
   BicepDeploymentScopeParams,
@@ -25,11 +30,6 @@ import {
   BicepUpdatedDeploymentParameter,
   ParametersFileUpdateOption,
 } from "./protocol";
-import { AzurePickers } from "./azure/azure-pickers";
-import { Command } from "../../infrastructure/commands";
-import { findOrCreateActiveBicepFile } from "../../infrastructure/editor";
-import { OutputChannelManager } from "../../infrastructure/logging";
-import { minutesToMs } from "../../infrastructure/timing";
 
 export class DeployCommand implements Command {
   private _none = "$(circle-slash) None";

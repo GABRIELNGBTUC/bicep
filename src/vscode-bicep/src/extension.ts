@@ -3,35 +3,31 @@
 
 import { registerAzureUtilsExtensionVariables } from "@microsoft/vscode-azext-azureutils";
 import { registerUIExtensionVariables } from "@microsoft/vscode-azext-utils";
-import {
-  ExtensionContext,
-  ProgressLocation,
-  Uri,
-  window,
-} from "vscode";
+import { ExtensionContext, ProgressLocation, Uri, window } from "vscode";
 import * as lsp from "vscode-languageclient/node";
-import { CommandManager } from "./infrastructure/commands";
 import { activateBuildFeature } from "./features/build";
 import { activateConfigurationFeature } from "./features/configuration";
 import { activateDecompileFeature } from "./features/decompile";
-import {
-  activateDeploymentFeature,
-  removePropertiesWithPossibleUserInfoInDeployParams,
-} from "./features/deployments";
+import { activateDeploymentFeature, removePropertiesWithPossibleUserInfoInDeployParams } from "./features/deployments";
 import { activateExternalSourceFeature } from "./features/external-source";
 import { activateImportKubernetesManifestFeature } from "./features/import-kubernetes-manifest";
 import { activateInsertResourceFeature } from "./features/insert-resource";
-import { activateModuleRestoreFeature } from "./features/module-restore";
 import { activateMcpFeature } from "./features/mcp";
+import { activateModuleRestoreFeature } from "./features/module-restore";
 import { activateParametersFeature } from "./features/parameters";
 import { activatePasteAsBicepFeature } from "./features/paste-as-bicep";
 import { activateRefactoringFeature } from "./features/refactoring";
 import * as surveys from "./features/surveys";
 import { activateVisualizationFeature } from "./features/visualization";
 import { activateWalkthroughFeature } from "./features/walkthrough";
+import { CommandManager } from "./infrastructure/commands";
 import { bicepConfigurationPrefix } from "./infrastructure/configuration";
 import { bicepLanguageId } from "./infrastructure/editor";
-import { createLanguageService, DiagnosticsRouter, ensureDotnetRuntimeInstalled } from "./infrastructure/language-client";
+import {
+  createLanguageService,
+  DiagnosticsRouter,
+  ensureDotnetRuntimeInstalled,
+} from "./infrastructure/language-client";
 import { Disposable } from "./infrastructure/lifecycle";
 import {
   activateWithTelemetryAndErrorHandling,
@@ -138,7 +134,6 @@ export async function activate(extensionContext: ExtensionContext): Promise<void
         getLogger().info("Bicep language service started.");
 
         activateMcpFeature(extension, extensionContext, dotnetCommandPath);
-
       },
     );
   });
