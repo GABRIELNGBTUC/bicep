@@ -1,6 +1,6 @@
 {
   "name": "Bicep Development Environment",
-  "image": "mcr.microsoft.com/devcontainers/base:bullseye",
+  "image": "mcr.microsoft.com/devcontainers/base:trixie",
   "customizations": {
     "vscode": {
       "extensions": [
